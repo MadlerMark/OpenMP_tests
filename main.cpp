@@ -3,34 +3,75 @@
 #include <omp.h>
 #include <time.h>
 
+#define ARR_SZ 100000000
+#define NUM_BLOCKS 100
+
+void saxpy(float a,float* z, float* x, float* y, int sz) {
+    #pragma omp target \
+    map(to:a, x, y) map(from:z)
+    #pragma omp teams default(shared)
+    #pragma omp distribute parallel for 
+    for (int i = 0; i < sz; i++) {
+        z[i] = a * x[i] + y[i];
+    }
+}
+
+void saxpy_cpu(float a,float* z, float* x, float* y, int sz){
+    //#pragma omp parallel for
+    for (int i = 0; i < sz; i++) {
+        z[i] = a * x[i] + y[i];
+    }
+}
+
 int main(int argc, char** argv)
 {
-    int n = 1000000;
-    int count =0;
-    int arr[1000000];
+    //float x[ARR_SZ];float y[ARR_SZ];float z[ARR_SZ];
+    float* x = new float[ARR_SZ];
+    float* y = new float[ARR_SZ];
+    float* z = new float[ARR_SZ];
+    float a = 2.718281828;
     struct timespec startTime, endTime;
+    unsigned long long elapsed_ns_gpu; double elapsed_s_gpu;
     unsigned long long elapsed_ns; double elapsed_s;
-    
+
     #pragma omp parallel for
-    for (int i=0; i<1000000; i++)
-        arr[i] = 0;
+    for (int i=0; i<ARR_SZ; i++){
+        x[i] = i;
+        y[i] = ARR_SZ - i;
+    }
     
     printf("number of devices %i\n",omp_get_num_devices()); //should be 1 for the GPU
 
-    #pragma omp target data map(arr)
-    clock_gettime(CLOCK_MONOTONIC, &startTime);
-    //   teams distribute   num_threads(16)
-    #pragma omp target parallel for 
-    for (int i=0; i<1000000; i++)
-    {
-        //printf("%i ",omp_get_thread_num());
-        arr[i] = omp_get_thread_num();
+    clock_gettime(CLOCK_MONOTONIC, &startTime); //   teams distribute   num_threads(16) 
+    #pragma omp target \
+    map(a,x[0:ARR_SZ],y[0:ARR_SZ],z[0:ARR_SZ])
+    #pragma omp teams 
+    #pragma omp distribute parallel for 
+    for (int i = 0; i < ARR_SZ; i++) {
+        z[i] = a * x[i] + y[i];
     }
+    clock_gettime(CLOCK_MONOTONIC, &endTime);
+
+    elapsed_ns_gpu = (endTime.tv_sec-startTime.tv_sec)*1000000000 + (endTime.tv_nsec-startTime.tv_nsec);
+    elapsed_s_gpu = ((double)elapsed_ns_gpu)/1000000000.0;
+    printf("finished GPU section, moving on to CPU...\n");
+    #pragma omp parallel for
+    for (int i=0; i<ARR_SZ; i++){
+        x[i] = i;
+        y[i] = ARR_SZ - i;
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &startTime); //   teams distribute   num_threads(16) 
+    saxpy_cpu(a,z,x,y,ARR_SZ);
     clock_gettime(CLOCK_MONOTONIC, &endTime);
     elapsed_ns = (endTime.tv_sec-startTime.tv_sec)*1000000000 + (endTime.tv_nsec-startTime.tv_nsec);
     elapsed_s = ((double)elapsed_ns)/1000000000.0;
-    for (int i=0; i<1000000; i++){
-        //printf("%i ", arr[i]);
-    }
-    printf("\ntime elapsed %f s or %lld ns\n",elapsed_s,elapsed_ns);
+
+
+    printf("\nGPU time elapsed %f s or %lld ns\n",elapsed_s_gpu,elapsed_ns_gpu);
+    printf("\nCPU time elapsed %f s or %lld ns\n",elapsed_s,elapsed_ns);
+
+    delete [] x;
+    delete [] y;
+    delete [] z;
 }
